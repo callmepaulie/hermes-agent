@@ -140,6 +140,25 @@ def _summarize_user_message_for_log(content: Any) -> str:
 # ID helpers
 # ---------------------------------------------------------------------------
 
+_CODEX_MAX_INPUT_ITEM_ID_LENGTH = 64
+
+
+def _valid_codex_input_item_id(raw_id: Any) -> Optional[str]:
+    """Return an assistant message/reasoning item id only if Codex will accept it.
+
+    The ChatGPT Codex backend rejects `input[*].id` values longer than 64
+    characters. Some historical sessions may contain opaque encrypted/cache
+    identifiers in `codex_message_items[].id`; those are not valid replay ids,
+    so omit them rather than failing the entire request.
+    """
+    if not isinstance(raw_id, str):
+        return None
+    value = raw_id.strip()
+    if not value or len(value) > _CODEX_MAX_INPUT_ITEM_ID_LENGTH:
+        return None
+    return value
+
+
 def _deterministic_call_id(fn_name: str, arguments: str, index: int = 0) -> str:
     """Generate a deterministic call_id from tool call content.
 
@@ -328,9 +347,9 @@ def _chat_messages_to_responses_input(messages: List[Dict[str, Any]]) -> List[Di
                             "status": _normalize_responses_message_status(raw_item.get("status")),
                             "content": normalized_content_parts,
                         }
-                        item_id = raw_item.get("id")
-                        if isinstance(item_id, str) and item_id.strip():
-                            replay_item["id"] = item_id.strip()
+                        item_id = _valid_codex_input_item_id(raw_item.get("id"))
+                        if item_id:
+                            replay_item["id"] = item_id
                         phase = raw_item.get("phase")
                         if isinstance(phase, str) and phase.strip():
                             replay_item["phase"] = phase.strip()
@@ -531,9 +550,9 @@ def _preflight_codex_input_items(raw_items: Any) -> List[Dict[str, Any]]:
                 "status": _normalize_responses_message_status(item.get("status")),
                 "content": normalized_content,
             }
-            item_id = item.get("id")
-            if isinstance(item_id, str) and item_id.strip():
-                normalized_item["id"] = item_id.strip()
+            item_id = _valid_codex_input_item_id(item.get("id"))
+            if item_id:
+                normalized_item["id"] = item_id
             phase = item.get("phase")
             if isinstance(phase, str) and phase.strip():
                 normalized_item["phase"] = phase.strip()

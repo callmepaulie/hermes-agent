@@ -1603,6 +1603,47 @@ def test_codex_message_item_status_survives_conversion_and_preflight(monkeypatch
     assert normalized[0]["status"] == "in_progress"
 
 
+def test_codex_message_item_overlong_id_is_omitted_for_backend_limit(monkeypatch):
+    """Codex rejects input message ids longer than 64 chars; omit them on replay."""
+    agent = _build_agent(monkeypatch)
+    from agent.codex_responses_adapter import (
+        _chat_messages_to_responses_input,
+        _preflight_codex_input_items,
+    )
+
+    overlong_id = "x" * 408
+    items = _chat_messages_to_responses_input([
+        {
+            "role": "assistant",
+            "content": "progress",
+            "codex_message_items": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "id": overlong_id,
+                    "phase": "commentary",
+                    "content": [{"type": "output_text", "text": "progress"}],
+                }
+            ],
+        }
+    ])
+    replay_item = next(item for item in items if item.get("type") == "message")
+    assert "id" not in replay_item
+    assert replay_item["phase"] == "commentary"
+
+    normalized = _preflight_codex_input_items([
+        {
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "id": overlong_id,
+            "content": [{"type": "output_text", "text": "progress"}],
+        }
+    ])
+    assert "id" not in normalized[0]
+
+
 def test_duplicate_detection_distinguishes_different_codex_reasoning(monkeypatch):
     """Two consecutive reasoning-only responses with different encrypted content
     must NOT be treated as duplicates."""

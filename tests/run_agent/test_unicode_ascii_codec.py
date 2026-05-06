@@ -152,8 +152,8 @@ class TestApiKeyNonAsciiSanitization:
 
     def test_strip_non_ascii_from_api_key(self):
         """_strip_non_ascii removes ʋ from an API key string."""
-        key = "sk-proj-abc" + "ʋ" + "def"
-        assert _strip_non_ascii(key) == "sk-proj-abcdef"
+        key = "sk-proj-testabc" + "ʋ" + "def"
+        assert _strip_non_ascii(key) == "sk-proj-testabcdef"
 
     def test_api_key_at_position_153(self):
         """Reproduce the exact error: ʋ at position 153 in 'Bearer <key>'."""
@@ -247,7 +247,7 @@ class TestApiKeyClientSync:
         from run_agent import AIAgent
 
         agent = AIAgent.__new__(AIAgent)
-        bad_key = "sk-proj-abc\u028bdef"  # ʋ lookalike at position 11
+        bad_key = "sk-proj-testabc\u028bdef"  # ʋ lookalike at position 15
         agent.api_key = bad_key
         agent._client_kwargs = {"api_key": bad_key}
         agent.quiet_mode = True
@@ -268,9 +268,9 @@ class TestApiKeyClientSync:
             agent.client.api_key = _clean_key
 
         # All three locations should now hold the clean key
-        assert agent.api_key == "sk-proj-abcdef"
-        assert agent._client_kwargs["api_key"] == "sk-proj-abcdef"
-        assert agent.client.api_key == "sk-proj-abcdef"
+        assert agent.api_key == "sk-proj-testabcdef"
+        assert agent._client_kwargs["api_key"] == "sk-proj-testabcdef"
+        assert agent.client.api_key == "sk-proj-testabcdef"
         # The bad char should be gone from all of them
         assert "\u028b" not in agent.api_key
         assert "\u028b" not in agent._client_kwargs["api_key"]

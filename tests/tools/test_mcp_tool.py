@@ -1255,7 +1255,7 @@ class TestBuildSafeEnv:
             "PATH": "/usr/bin",
             "AWS_SECRET_ACCESS_KEY": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
             "GITHUB_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-            "OPENAI_API_KEY": "sk-proj-abc123",
+            "OPENAI_API_KEY": "sk-proj-testfixtureabc123",
             "DATABASE_URL": "postgres://user:pass@localhost/db",
             "API_SECRET": "supersecret",
         }

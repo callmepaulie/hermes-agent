@@ -24,18 +24,18 @@ class TestCheckNonAsciiCredential:
 
     def test_strips_unicode_v_lookalike(self, capsys):
         """The exact scenario from issue #6843: ʋ instead of v."""
-        key = "sk-proj-abc" + "ʋ" + "def"  # \u028b
+        key = "sk-proj-testabc" + "ʋ" + "def"  # \u028b
         result = _check_non_ascii_credential("OPENROUTER_API_KEY", key)
-        assert result == "sk-proj-abcdef"
+        assert result == "sk-proj-testabcdef"
         assert "ʋ" not in result
         # Should print a warning
         captured = capsys.readouterr()
         assert "non-ASCII" in captured.err
 
     def test_strips_multiple_non_ascii(self, capsys):
-        key = "sk-proj-aʋbécd"
+        key = "sk-proj-testaʋbécd"
         result = _check_non_ascii_credential("OPENAI_API_KEY", key)
-        assert result == "sk-proj-abcd"
+        assert result == "sk-proj-testabcd"
         captured = capsys.readouterr()
         assert "U+028B" in captured.err  # reports the char
 
@@ -57,9 +57,9 @@ class TestEnvLoaderSanitization:
         from hermes_cli.env_loader import _sanitize_loaded_credentials, _WARNED_KEYS
 
         _WARNED_KEYS.discard("OPENROUTER_API_KEY")
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-proj-abcʋdef")
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-proj-testabcʋdef")
         _sanitize_loaded_credentials()
-        assert os.environ["OPENROUTER_API_KEY"] == "sk-proj-abcdef"
+        assert os.environ["OPENROUTER_API_KEY"] == "sk-proj-testabcdef"
 
     def test_strips_non_ascii_from_token(self, monkeypatch):
         from hermes_cli.env_loader import _sanitize_loaded_credentials, _WARNED_KEYS
@@ -80,9 +80,9 @@ class TestEnvLoaderSanitization:
     def test_ascii_credentials_untouched(self, monkeypatch):
         from hermes_cli.env_loader import _sanitize_loaded_credentials
 
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-allascii123")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-proj-testallascii123")
         _sanitize_loaded_credentials()
-        assert os.environ["OPENAI_API_KEY"] == "sk-proj-allascii123"
+        assert os.environ["OPENAI_API_KEY"] == "sk-proj-testallascii123"
 
     def test_warns_to_stderr_when_stripping(self, monkeypatch, capsys):
         """Silent stripping masks bad keys as opaque provider 400s (see #6843 fallout).

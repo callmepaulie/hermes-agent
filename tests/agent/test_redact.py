@@ -18,7 +18,7 @@ def _ensure_redaction_enabled(monkeypatch):
 
 class TestKnownPrefixes:
     def test_openai_sk_key(self):
-        text = "Using key sk-proj-abc123def456ghi789jkl012"
+        text = "Using key sk-proj-testfixtureabc123def456ghi789jkl012"
         result = redact_sensitive_text(text)
         assert "sk-pro" in result
         assert "abc123def456" not in result
@@ -61,7 +61,7 @@ class TestKnownPrefixes:
 
 class TestEnvAssignments:
     def test_export_api_key(self):
-        text = "export OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012"
+        text = "export OPENAI_API_KEY=sk-proj-testfixtureabc123def456ghi789jkl012"
         result = redact_sensitive_text(text)
         assert "OPENAI_API_KEY=" in result
         assert "abc123def456" not in result
@@ -117,7 +117,7 @@ class TestEnvAssignments:
 
 class TestJsonFields:
     def test_json_api_key(self):
-        text = '{"apiKey": "sk-proj-abc123def456ghi789jkl012"}'
+        text = '{"apiKey": "sk-proj-testfixtureabc123def456ghi789jkl012"}'
         result = redact_sensitive_text(text)
         assert "abc123def456" not in result
 
@@ -134,7 +134,7 @@ class TestJsonFields:
 
 class TestAuthHeaders:
     def test_bearer_token(self):
-        text = "Authorization: Bearer sk-proj-abc123def456ghi789jkl012"
+        text = "Authorization: Bearer sk-proj-testfixtureabc123def456ghi789jkl012"
         result = redact_sensitive_text(text)
         assert "Authorization: Bearer" in result
         assert "abc123def456" not in result
@@ -169,7 +169,7 @@ class TestPassthrough:
         assert redact_sensitive_text(12345) == "12345"
 
     def test_non_string_input_dict_coerced_and_redacted(self):
-        result = redact_sensitive_text({"token": "sk-proj-abc123def456ghi789jkl012"})
+        result = redact_sensitive_text({"token": "sk-proj-testfixtureabc123def456ghi789jkl012"})
         assert "abc123def456" not in result
 
     def test_normal_text_unchanged(self):
@@ -193,7 +193,7 @@ class TestRedactingFormatter:
             level=logging.INFO,
             pathname="",
             lineno=0,
-            msg="Key is sk-proj-abc123def456ghi789jkl012",
+            msg="Key is sk-proj-testfixtureabc123def456ghi789jkl012",
             args=(),
             exc_info=None,
         )
@@ -208,7 +208,7 @@ class TestPrintenvSimulation:
     def test_full_env_dump(self):
         env_dump = """HOME=/home/user
 PATH=/usr/local/bin:/usr/bin
-OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345
+OPENAI_API_KEY=sk-proj-testfixtureabc123def456ghi789jkl012
 OPENROUTER_API_KEY=sk-or-v1-reallyLongSecretKeyValue12345678
 FIRECRAWL_API_KEY=fc-shortkey123456789012
 TELEGRAM_BOT_TOKEN=bot987654321:ABCDEfghij-KLMNopqrst_UVWXyz12345

@@ -303,6 +303,7 @@ class TestBuiltinDiscovery:
             "tools.feishu_doc_tool",
             "tools.feishu_drive_tool",
             "tools.file_tools",
+            "tools.frameio_tool",
             "tools.homeassistant_tool",
             "tools.image_generation_tool",
             "tools.kanban_tools",

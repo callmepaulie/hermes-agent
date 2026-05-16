@@ -97,6 +97,30 @@ TOOLSETS = {
         "tools": ["video_analyze"],
         "includes": []
     },
+
+    "frameio": {
+        "description": "Frame.io V4 API workflow automation: auth, discovery, uploads, shares, media links, and comments",
+        "tools": [
+            "frameio_login",
+            "frameio_status",
+            "frameio_me",
+            "frameio_list_accounts",
+            "frameio_list_workspaces",
+            "frameio_list_projects",
+            "frameio_list_folder_children",
+            "frameio_find_folder",
+            "frameio_create_folder",
+            "frameio_upload_file",
+            "frameio_create_remote_upload",
+            "frameio_upload_status",
+            "frameio_get_media_links",
+            "frameio_create_share",
+            "frameio_list_shares",
+            "frameio_list_comments",
+            "frameio_create_comment",
+        ],
+        "includes": []
+    },
     
     "image_gen": {
         "description": "Creative generation tools (images)",

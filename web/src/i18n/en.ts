@@ -72,6 +72,7 @@ export const en: Translations = {
       config: "Config",
       cron: "Cron",
       documentation: "Documentation",
+      frameio: "Frame.io",
       keys: "Keys",
       logs: "Logs",
       models: "Models",

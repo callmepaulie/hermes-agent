@@ -10,6 +10,7 @@ const BUILTIN: Record<string, keyof Translations["app"]["nav"]> = {
   "/plugins": "plugins",
   "/config": "config",
   "/env": "keys",
+  "/frameio": "frameio",
   "/docs": "documentation",
 };
 

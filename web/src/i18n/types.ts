@@ -72,6 +72,7 @@ export interface Translations {
       config: string;
       cron: string;
       documentation: string;
+      frameio: string;
       keys: string;
       logs: string;
       models: string;

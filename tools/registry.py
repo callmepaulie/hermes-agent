@@ -31,12 +31,17 @@ def _is_registry_register_call(node: ast.AST) -> bool:
     if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
         return False
     func = node.value.func
-    return (
+    if (
         isinstance(func, ast.Attribute)
         and func.attr == "register"
         and isinstance(func.value, ast.Name)
         and func.value.id == "registry"
-    )
+    ):
+        return True
+    # Some tool modules use a tiny local helper around registry.register to
+    # avoid repeating common metadata for many tools. Treat top-level helper
+    # calls named like *_register as self-registration too.
+    return isinstance(func, ast.Name) and func.id.endswith("register")
 
 
 def _module_registers_tools(module_path: Path) -> bool:

@@ -24,6 +24,7 @@ import {
   Database,
   Download,
   Eye,
+  Film,
   FileText,
   Globe,
   Heart,
@@ -58,6 +59,7 @@ import type { SystemAction } from "@/contexts/system-actions-context";
 import ConfigPage from "@/pages/ConfigPage";
 import DocsPage from "@/pages/DocsPage";
 import EnvPage from "@/pages/EnvPage";
+import FrameioPage from "@/pages/FrameioPage";
 import SessionsPage from "@/pages/SessionsPage";
 import LogsPage from "@/pages/LogsPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
@@ -116,6 +118,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/profiles": ProfilesPage,
   "/config": ConfigPage,
   "/env": EnvPage,
+  "/frameio": FrameioPage,
   "/docs": DocsPage,
 };
 
@@ -153,6 +156,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
   { path: "/profiles", labelKey: "profiles", label: "Profiles", icon: Users },
   { path: "/config", labelKey: "config", label: "Config", icon: Settings },
   { path: "/env", labelKey: "keys", label: "Keys", icon: KeyRound },
+  { path: "/frameio", labelKey: "frameio", label: "Frame.io", icon: Film },
   {
     path: "/docs",
     labelKey: "documentation",
@@ -167,6 +171,7 @@ const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
   Clock,
   Cpu,
   FileText,
+  Film,
   KeyRound,
   MessageSquare,
   Package,

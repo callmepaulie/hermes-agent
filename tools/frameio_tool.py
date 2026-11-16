@@ -54,8 +54,28 @@ def _legacy_token() -> str:
     return os.getenv("FRAMEIO_LEGACY_TOKEN", "").strip()
 
 
+def _config_setting(key: str) -> str:
+    """Return a string from the ``frameio`` section of config.yaml ("" if unset).
+
+    Never raises: if config cannot be loaded the caller falls back to defaults.
+    """
+    try:
+        from hermes_cli.config import load_config
+
+        section = load_config().get("frameio")
+        value = section.get(key) if isinstance(section, dict) else None
+        return value.strip() if isinstance(value, str) else ""
+    except Exception:
+        return ""
+
+
 def _redirect_uri() -> str:
-    return os.getenv("FRAMEIO_REDIRECT_URI", DEFAULT_REDIRECT_URI).strip() or DEFAULT_REDIRECT_URI
+    """FRAMEIO_REDIRECT_URI env overrides ``frameio.redirect_uri`` in config.yaml."""
+    return (
+        os.getenv("FRAMEIO_REDIRECT_URI", "").strip()
+        or _config_setting("redirect_uri")
+        or DEFAULT_REDIRECT_URI
+    )
 
 
 def _auth_mode() -> str:
@@ -65,9 +85,11 @@ def _auth_mode() -> str:
     token without also editing another env key. Otherwise defaults to OAuth.
     """
 
-    raw = os.getenv("FRAMEIO_AUTH_MODE", "").strip().lower()
-    if raw in {"legacy", "oauth", "s2s"}:
-        return raw
+    # FRAMEIO_AUTH_MODE env overrides ``frameio.auth_mode`` in config.yaml.
+    for raw in (os.getenv("FRAMEIO_AUTH_MODE", ""), _config_setting("auth_mode")):
+        raw = raw.strip().lower()
+        if raw in {"legacy", "oauth", "s2s"}:
+            return raw
     if _legacy_token():
         return "legacy"
     return "oauth"
@@ -393,46 +415,78 @@ def frameio_login(code: str = "", state: str = "") -> str:
     )
 
 
+def _after_error(after: Any) -> str | None:
+    """Reject an ``after`` cursor that is not a plain string without whitespace/control chars."""
+    if after in (None, ""):
+        return None
+    if not isinstance(after, str) or any(ch.isspace() or not ch.isprintable() for ch in after):
+        return _json({"success": False, "error": "after must be a string without whitespace or control characters"})
+    return None
+
+
+def _list_page(path: str, after: Any = "", params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """GET one page of a paged collection and add a top-level ``next_after`` cursor."""
+    query = dict(params or {})
+    if after:
+        query["after"] = after
+
+    def fetch() -> Any:
+        return _api_get(path, params=query or None)
+
+    result = _safe_api_call(fetch)
+    if result.get("success"):
+        result["next_after"] = _next_page_cursor(result.get("data"))[0]
+    return result
+
+
 def frameio_me() -> str:
     return _json(_safe_api_call(lambda: _api_get("/me")))
 
 
-def frameio_list_accounts() -> str:
-    return _json(_safe_api_call(lambda: _api_get("/accounts")))
+def frameio_list_accounts(after: str = "") -> str:
+    if error := _after_error(after):
+        return error
+    return _json(_list_page("/accounts", after))
 
 
-def frameio_list_workspaces(account_id: str) -> str:
+def frameio_list_workspaces(account_id: str, after: str = "") -> str:
     if error := _require(account_id, "account_id"):
         return _json({"success": False, "error": error})
     if error := _id_error(account_id=account_id):
         return error
+    if error := _after_error(after):
+        return error
     safe_account = _seg(account_id, "account_id")
-    return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/workspaces")))
+    return _json(_list_page(f"/accounts/{safe_account}/workspaces", after))
 
 
-def frameio_list_projects(account_id: str, workspace_id: str) -> str:
+def frameio_list_projects(account_id: str, workspace_id: str, after: str = "") -> str:
     if error := _require(account_id, "account_id"):
         return _json({"success": False, "error": error})
     if error := _require(workspace_id, "workspace_id"):
         return _json({"success": False, "error": error})
     if error := _id_error(account_id=account_id, workspace_id=workspace_id):
         return error
+    if error := _after_error(after):
+        return error
     safe_account = _seg(account_id, "account_id")
     safe_workspace = _seg(workspace_id, "workspace_id")
-    return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/workspaces/{safe_workspace}/projects")))
+    return _json(_list_page(f"/accounts/{safe_account}/workspaces/{safe_workspace}/projects", after))
 
 
-def frameio_list_folder_children(account_id: str, folder_id: str, include: str = "") -> str:
+def frameio_list_folder_children(account_id: str, folder_id: str, include: str = "", after: str = "") -> str:
     if error := _require(account_id, "account_id"):
         return _json({"success": False, "error": error})
     if error := _require(folder_id, "folder_id"):
         return _json({"success": False, "error": error})
     if error := _id_error(account_id=account_id, folder_id=folder_id):
         return error
+    if error := _after_error(after):
+        return error
     safe_account = _seg(account_id, "account_id")
     safe_folder = _seg(folder_id, "folder_id")
     params = {"include": include} if include else None
-    return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/folders/{safe_folder}/children", params=params)))
+    return _json(_list_page(f"/accounts/{safe_account}/folders/{safe_folder}/children", after, params))
 
 
 def _iter_items(data: Any) -> list[dict[str, Any]]:
@@ -712,26 +766,30 @@ def frameio_create_share(
     return _json(_safe_api_call(lambda: _api_post(f"/accounts/{safe_account}/projects/{safe_project}/shares", {"data": data})))
 
 
-def frameio_list_shares(account_id: str, project_id: str) -> str:
+def frameio_list_shares(account_id: str, project_id: str, after: str = "") -> str:
     for value, label in [(account_id, "account_id"), (project_id, "project_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
     if error := _id_error(account_id=account_id, project_id=project_id):
         return error
+    if error := _after_error(after):
+        return error
     safe_account = _seg(account_id, "account_id")
     safe_project = _seg(project_id, "project_id")
-    return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/projects/{safe_project}/shares")))
+    return _json(_list_page(f"/accounts/{safe_account}/projects/{safe_project}/shares", after))
 
 
-def frameio_list_comments(account_id: str, file_id: str) -> str:
+def frameio_list_comments(account_id: str, file_id: str, after: str = "") -> str:
     for value, label in [(account_id, "account_id"), (file_id, "file_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
     if error := _id_error(account_id=account_id, file_id=file_id):
         return error
+    if error := _after_error(after):
+        return error
     safe_account = _seg(account_id, "account_id")
     safe_file = _seg(file_id, "file_id")
-    return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/files/{safe_file}/comments")))
+    return _json(_list_page(f"/accounts/{safe_account}/files/{safe_file}/comments", after))
 
 
 def frameio_create_comment(account_id: str, file_id: str, text: str, timestamp: str = "") -> str:
@@ -761,6 +819,10 @@ def _schema(name: str, description: str, properties: dict[str, Any] | None = Non
 
 
 UUID_PROP = {"type": "string", "description": "Frame.io UUID."}
+AFTER_PROP = {
+    "type": "string",
+    "description": "Optional pagination cursor: pass the previous response's next_after to fetch the next page.",
+}
 
 FRAMEIO_LOGIN_SCHEMA = _schema(
     "frameio_login",
@@ -772,23 +834,27 @@ FRAMEIO_LOGIN_SCHEMA = _schema(
 )
 FRAMEIO_STATUS_SCHEMA = _schema("frameio_status", "Show Frame.io auth/config status without printing secrets or tokens.")
 FRAMEIO_ME_SCHEMA = _schema("frameio_me", "Show Frame.io V4 current user details.")
-FRAMEIO_LIST_ACCOUNTS_SCHEMA = _schema("frameio_list_accounts", "List Frame.io V4 accounts for the authenticated user.")
+FRAMEIO_LIST_ACCOUNTS_SCHEMA = _schema(
+    "frameio_list_accounts",
+    "List Frame.io V4 accounts for the authenticated user.",
+    {"after": AFTER_PROP},
+)
 FRAMEIO_LIST_WORKSPACES_SCHEMA = _schema(
     "frameio_list_workspaces",
     "List workspaces under a Frame.io account.",
-    {"account_id": UUID_PROP},
+    {"account_id": UUID_PROP, "after": AFTER_PROP},
     ["account_id"],
 )
 FRAMEIO_LIST_PROJECTS_SCHEMA = _schema(
     "frameio_list_projects",
     "List projects under a Frame.io account/workspace.",
-    {"account_id": UUID_PROP, "workspace_id": UUID_PROP},
+    {"account_id": UUID_PROP, "workspace_id": UUID_PROP, "after": AFTER_PROP},
     ["account_id", "workspace_id"],
 )
 FRAMEIO_LIST_FOLDER_CHILDREN_SCHEMA = _schema(
     "frameio_list_folder_children",
     "List children of a Frame.io folder. Use a project's root_folder_id for top-level project contents.",
-    {"account_id": UUID_PROP, "folder_id": UUID_PROP, "include": {"type": "string", "description": "Optional include query, e.g. media_links.thumbnail."}},
+    {"account_id": UUID_PROP, "folder_id": UUID_PROP, "include": {"type": "string", "description": "Optional include query, e.g. media_links.thumbnail."}, "after": AFTER_PROP},
     ["account_id", "folder_id"],
 )
 FRAMEIO_FIND_FOLDER_SCHEMA = _schema(
@@ -859,13 +925,13 @@ FRAMEIO_CREATE_SHARE_SCHEMA = _schema(
 FRAMEIO_LIST_SHARES_SCHEMA = _schema(
     "frameio_list_shares",
     "List shares under a Frame.io project.",
-    {"account_id": UUID_PROP, "project_id": UUID_PROP},
+    {"account_id": UUID_PROP, "project_id": UUID_PROP, "after": AFTER_PROP},
     ["account_id", "project_id"],
 )
 FRAMEIO_LIST_COMMENTS_SCHEMA = _schema(
     "frameio_list_comments",
     "List comments on a Frame.io file.",
-    {"account_id": UUID_PROP, "file_id": UUID_PROP},
+    {"account_id": UUID_PROP, "file_id": UUID_PROP, "after": AFTER_PROP},
     ["account_id", "file_id"],
 )
 FRAMEIO_CREATE_COMMENT_SCHEMA = _schema(
@@ -897,10 +963,10 @@ def _register(name: str, schema: dict[str, Any], handler: Any, description: str)
 _register("frameio_login", FRAMEIO_LOGIN_SCHEMA, lambda args, **kw: frameio_login(code=args.get("code", ""), state=args.get("state", "")), "Start or complete Frame.io OAuth.")
 _register("frameio_status", FRAMEIO_STATUS_SCHEMA, lambda args, **kw: frameio_status(), "Show Frame.io auth status.")
 _register("frameio_me", FRAMEIO_ME_SCHEMA, lambda args, **kw: frameio_me(), "Show Frame.io current user.")
-_register("frameio_list_accounts", FRAMEIO_LIST_ACCOUNTS_SCHEMA, lambda args, **kw: frameio_list_accounts(), "List Frame.io accounts.")
-_register("frameio_list_workspaces", FRAMEIO_LIST_WORKSPACES_SCHEMA, lambda args, **kw: frameio_list_workspaces(account_id=args.get("account_id", "")), "List Frame.io workspaces.")
-_register("frameio_list_projects", FRAMEIO_LIST_PROJECTS_SCHEMA, lambda args, **kw: frameio_list_projects(account_id=args.get("account_id", ""), workspace_id=args.get("workspace_id", "")), "List Frame.io projects.")
-_register("frameio_list_folder_children", FRAMEIO_LIST_FOLDER_CHILDREN_SCHEMA, lambda args, **kw: frameio_list_folder_children(account_id=args.get("account_id", ""), folder_id=args.get("folder_id", ""), include=args.get("include", "")), "List Frame.io folder children.")
+_register("frameio_list_accounts", FRAMEIO_LIST_ACCOUNTS_SCHEMA, lambda args, **kw: frameio_list_accounts(after=args.get("after", "")), "List Frame.io accounts.")
+_register("frameio_list_workspaces", FRAMEIO_LIST_WORKSPACES_SCHEMA, lambda args, **kw: frameio_list_workspaces(account_id=args.get("account_id", ""), after=args.get("after", "")), "List Frame.io workspaces.")
+_register("frameio_list_projects", FRAMEIO_LIST_PROJECTS_SCHEMA, lambda args, **kw: frameio_list_projects(account_id=args.get("account_id", ""), workspace_id=args.get("workspace_id", ""), after=args.get("after", "")), "List Frame.io projects.")
+_register("frameio_list_folder_children", FRAMEIO_LIST_FOLDER_CHILDREN_SCHEMA, lambda args, **kw: frameio_list_folder_children(account_id=args.get("account_id", ""), folder_id=args.get("folder_id", ""), include=args.get("include", ""), after=args.get("after", "")), "List Frame.io folder children.")
 _register(
     "frameio_find_folder",
     FRAMEIO_FIND_FOLDER_SCHEMA,
@@ -931,6 +997,6 @@ _register(
     ),
     "Create Frame.io share/review link.",
 )
-_register("frameio_list_shares", FRAMEIO_LIST_SHARES_SCHEMA, lambda args, **kw: frameio_list_shares(account_id=args.get("account_id", ""), project_id=args.get("project_id", "")), "List Frame.io shares.")
-_register("frameio_list_comments", FRAMEIO_LIST_COMMENTS_SCHEMA, lambda args, **kw: frameio_list_comments(account_id=args.get("account_id", ""), file_id=args.get("file_id", "")), "List Frame.io comments.")
+_register("frameio_list_shares", FRAMEIO_LIST_SHARES_SCHEMA, lambda args, **kw: frameio_list_shares(account_id=args.get("account_id", ""), project_id=args.get("project_id", ""), after=args.get("after", "")), "List Frame.io shares.")
+_register("frameio_list_comments", FRAMEIO_LIST_COMMENTS_SCHEMA, lambda args, **kw: frameio_list_comments(account_id=args.get("account_id", ""), file_id=args.get("file_id", ""), after=args.get("after", "")), "List Frame.io comments.")
 _register("frameio_create_comment", FRAMEIO_CREATE_COMMENT_SCHEMA, lambda args, **kw: frameio_create_comment(account_id=args.get("account_id", ""), file_id=args.get("file_id", ""), text=args.get("text", ""), timestamp=args.get("timestamp", "")), "Create Frame.io comment.")

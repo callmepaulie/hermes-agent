@@ -1060,6 +1060,17 @@ DEFAULT_CONFIG = {
     # (apiKey, workspace, peerName, sessions, enabled) comes from the global config.
     "honcho": {},
 
+    # Frame.io toolset (tools/frameio_tool.py). Non-secret settings only; the
+    # credentials stay in ~/.hermes/.env. FRAMEIO_REDIRECT_URI and
+    # FRAMEIO_AUTH_MODE env vars, when set, override these values.
+    "frameio": {
+        # OAuth redirect URI registered with the Adobe IMS app.
+        "redirect_uri": "http://127.0.0.1:43828/frameio/callback",
+        # "legacy", "oauth" or "s2s". Empty = auto: legacy if
+        # FRAMEIO_LEGACY_TOKEN is set, otherwise oauth.
+        "auth_mode": "",
+    },
+
     # IANA timezone (e.g. "Asia/Kolkata", "America/New_York").
     # Empty string means use server-local time.
     "timezone": "",

@@ -683,3 +683,207 @@ def test_registry_only_treats_underscore_register_helper_as_self_registration():
     assert not _is_registry_register_call(parse("my_register('x')"))
     assert not _is_registry_register_call(parse("deregister('x')"))
     assert not _is_registry_register_call(parse("register('x')"))
+
+
+# ---------------------------------------------------------------------------
+# config.yaml settings (env overrides config, config overrides default)
+# ---------------------------------------------------------------------------
+
+
+def _write_frameio_config(tmp_path, body: str) -> None:
+    (tmp_path / "config.yaml").write_text(body, encoding="utf-8")
+
+
+def test_frameio_config_defaults_are_declared():
+    from hermes_cli.config import DEFAULT_CONFIG
+    from tools import frameio_tool
+
+    assert DEFAULT_CONFIG["frameio"]["redirect_uri"] == frameio_tool.DEFAULT_REDIRECT_URI
+    assert DEFAULT_CONFIG["frameio"]["auth_mode"] == ""
+
+
+def test_redirect_uri_default_when_env_and_config_unset():
+    from tools import frameio_tool
+
+    assert frameio_tool._redirect_uri() == frameio_tool.DEFAULT_REDIRECT_URI
+
+
+def test_redirect_uri_read_from_config_when_env_unset(clean_frameio_env):
+    from tools import frameio_tool
+
+    _write_frameio_config(clean_frameio_env, "frameio:\n  redirect_uri: http://127.0.0.1:9999/cb\n")
+
+    assert frameio_tool._redirect_uri() == "http://127.0.0.1:9999/cb"
+
+
+def test_redirect_uri_env_overrides_config(monkeypatch, clean_frameio_env):
+    from tools import frameio_tool
+
+    _write_frameio_config(clean_frameio_env, "frameio:\n  redirect_uri: http://127.0.0.1:9999/cb\n")
+    monkeypatch.setenv("FRAMEIO_REDIRECT_URI", "http://127.0.0.1:1111/env")
+
+    assert frameio_tool._redirect_uri() == "http://127.0.0.1:1111/env"
+
+
+def test_auth_mode_read_from_config_when_env_unset(clean_frameio_env):
+    from tools import frameio_tool
+
+    _write_frameio_config(clean_frameio_env, "frameio:\n  auth_mode: s2s\n")
+
+    assert frameio_tool._auth_mode() == "s2s"
+
+
+def test_auth_mode_env_overrides_config(monkeypatch, clean_frameio_env):
+    from tools import frameio_tool
+
+    _write_frameio_config(clean_frameio_env, "frameio:\n  auth_mode: s2s\n")
+    monkeypatch.setenv("FRAMEIO_AUTH_MODE", "legacy")
+
+    assert frameio_tool._auth_mode() == "legacy"
+
+
+def test_auth_mode_defaults_when_neither_set(monkeypatch):
+    from tools import frameio_tool
+
+    assert frameio_tool._auth_mode() == "oauth"
+    monkeypatch.setenv("FRAMEIO_LEGACY_TOKEN", "tok")
+    assert frameio_tool._auth_mode() == "legacy"
+
+
+def test_invalid_config_auth_mode_falls_through_to_default(clean_frameio_env):
+    from tools import frameio_tool
+
+    _write_frameio_config(clean_frameio_env, "frameio:\n  auth_mode: bogus\n")
+
+    assert frameio_tool._auth_mode() == "oauth"
+
+
+def test_config_load_failure_falls_back_to_defaults(monkeypatch):
+    from tools import frameio_tool
+
+    def boom():
+        raise RuntimeError("config unreadable")
+
+    monkeypatch.setattr("hermes_cli.config.load_config", boom)
+
+    assert frameio_tool._redirect_uri() == frameio_tool.DEFAULT_REDIRECT_URI
+    assert frameio_tool._auth_mode() == "oauth"
+
+
+# ---------------------------------------------------------------------------
+# Pagination: `after` in, `next_after` out
+# ---------------------------------------------------------------------------
+
+
+def _paged_calls():
+    from tools import frameio_tool
+
+    return [
+        ("frameio_list_accounts", (), "/v4/accounts"),
+        ("frameio_list_workspaces", ("acct_1",), "/v4/accounts/acct_1/workspaces"),
+        ("frameio_list_projects", ("acct_1", "ws_1"), "/v4/accounts/acct_1/workspaces/ws_1/projects"),
+        ("frameio_list_folder_children", ("acct_1", "fold_1"), "/v4/accounts/acct_1/folders/fold_1/children"),
+        ("frameio_list_shares", ("acct_1", "proj_1"), "/v4/accounts/acct_1/projects/proj_1/shares"),
+        ("frameio_list_comments", ("acct_1", "file_1"), "/v4/accounts/acct_1/files/file_1/comments"),
+    ]
+
+
+@pytest.mark.parametrize("fn_name,args,path", _paged_calls())
+def test_list_tools_send_after_and_return_next_after(monkeypatch, fn_name, args, path):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        urls.append(url)
+        return {"data": [{"id": "x"}], "links": {"next": f"{path}?after=cur_next"}}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(getattr(frameio_tool, fn_name)(*args, after="cur_1"))
+
+    assert result["success"] is True
+    assert result["data"]["data"] == [{"id": "x"}]
+    assert result["next_after"] == "cur_next"
+    assert urls[0].endswith("?after=cur_1") or "&after=cur_1" in urls[0]
+    assert "after=" not in urls[0].split("?")[0]
+
+
+@pytest.mark.parametrize("fn_name,args,path", _paged_calls())
+def test_list_tools_next_after_is_null_without_links(monkeypatch, fn_name, args, path):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        urls.append(url)
+        return {"data": []}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(getattr(frameio_tool, fn_name)(*args))
+
+    assert result["success"] is True
+    assert result["next_after"] is None
+    assert urls[0] == f"https://api.frame.io{path}"
+
+
+def test_folder_children_keeps_include_alongside_after(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda m, url, **kw: urls.append(url) or {"data": []})
+
+    frameio_tool.frameio_list_folder_children("acct_1", "fold_1", include="media_links.thumbnail", after="c1")
+
+    assert "include=media_links.thumbnail" in urls[0]
+    assert "after=c1" in urls[0]
+
+
+@pytest.mark.parametrize("bad", ["a b", "a\nb", "a\tb", "a\x00b", 123])
+def test_list_tools_reject_malformed_after_before_any_request(monkeypatch, bad):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    called = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda *a, **k: called.append(1) or {})
+
+    result = json.loads(frameio_tool.frameio_list_projects("acct_1", "ws_1", after=bad))
+
+    assert result["success"] is False
+    assert "after" in result["error"]
+    assert called == []
+
+
+def test_after_is_query_encoded_not_path_injected(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda m, url, **kw: urls.append(url) or {"data": []})
+
+    frameio_tool.frameio_list_projects("acct_1", "ws_1", after="a/b&c=d")
+
+    assert urls[0] == "https://api.frame.io/v4/accounts/acct_1/workspaces/ws_1/projects?after=a%2Fb%26c%3Dd"
+
+
+@pytest.mark.parametrize("tool", [
+    "frameio_list_accounts", "frameio_list_workspaces", "frameio_list_projects",
+    "frameio_list_folder_children", "frameio_list_shares", "frameio_list_comments",
+])
+def test_registered_list_tools_expose_and_dispatch_after(monkeypatch, tool):
+    from tools import frameio_tool
+    from tools.registry import registry
+
+    entry = registry.get_entry(tool) if hasattr(registry, "get_entry") else registry._tools[tool]
+    assert "after" in entry.schema["parameters"]["properties"]
+    assert "after" not in entry.schema["parameters"].get("required", [])
+
+    seen = {}
+    monkeypatch.setattr(frameio_tool, "_list_page", lambda path, after="", params=None: seen.update(after=after) or {"success": True})
+    entry.handler({"account_id": "a", "workspace_id": "w", "folder_id": "f", "project_id": "p", "file_id": "i", "after": "cur"})
+
+    assert seen["after"] == "cur"

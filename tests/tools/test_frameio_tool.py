@@ -443,6 +443,48 @@ def test_find_folder_rejects_unsafe_ids_returned_by_the_api(monkeypatch):
     assert len(urls) == 1
 
 
+def test_find_folder_follows_next_page_links(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        urls.append(url)
+        if "after=" not in url:
+            return {
+                "data": [{"id": "f_1", "name": "Dailies", "type": "file"}],
+                "links": {"next": "/v4/accounts/acct_1/folders/root_1/children?after=cur_2"},
+            }
+        return {"data": [{"id": "f_2", "name": "Review Exports", "type": "folder"}], "links": {"next": None}}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(frameio_tool.frameio_find_folder("acct_1", "Review Exports", "root_1"))
+
+    assert result["success"] is True
+    assert result["found"] is True
+    assert result["folder"]["id"] == "f_2"
+    assert len(urls) == 2
+    assert urls[1].endswith("after=cur_2")
+
+
+def test_find_folder_fails_when_more_pages_cannot_be_followed(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        return {"data": [], "links": {"next": "/v4/accounts/acct_1/folders/root_1/children?page=2"}}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(frameio_tool.frameio_find_folder("acct_1", "missing", "root_1"))
+
+    assert result["success"] is False
+    assert "incomplete" in result["error"]
+
+
 def test_seg_encodes_everything_unsafe_in_one_segment():
     from tools import frameio_tool
 

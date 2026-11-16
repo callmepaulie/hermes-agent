@@ -446,6 +446,49 @@ def _iter_items(data: Any) -> list[dict[str, Any]]:
     return []
 
 
+MAX_CHILD_PAGES = 200
+
+
+def _next_page_cursor(data: Any) -> tuple[str | None, bool]:
+    """Return (cursor, more_pages) from a paged list response.
+
+    Frame.io V4 list responses carry ``links.next`` with an ``after`` cursor.
+    ``more_pages`` is True when the response says another page exists, even
+    if no usable cursor could be read from it.
+    """
+    if not isinstance(data, dict):
+        return None, False
+    links = data.get("links")
+    nxt = links.get("next") if isinstance(links, dict) else None
+    if not nxt or not isinstance(nxt, str):
+        return None, False
+    query = urllib.parse.urlparse(nxt).query
+    after = urllib.parse.parse_qs(query).get("after", [None])[0]
+    return (after or None), True
+
+
+def _iter_all_children(path: str) -> list[dict[str, Any]]:
+    """Fetch every page of a children listing.
+
+    Raises RuntimeError rather than returning a partial list, so a caller
+    never reports "not found" after looking at only some of the children.
+    """
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    params: dict[str, Any] | None = None
+    for _ in range(MAX_CHILD_PAGES):
+        data = _api_get(path, params=params)
+        items.extend(_iter_items(data))
+        cursor, more = _next_page_cursor(data)
+        if not more:
+            return items
+        if not cursor or cursor in seen:
+            raise RuntimeError("Frame.io listing has more pages but no usable next-page cursor; search is incomplete")
+        seen.add(cursor)
+        params = {"after": cursor}
+    raise RuntimeError(f"Frame.io listing exceeded {MAX_CHILD_PAGES} pages; search is incomplete")
+
+
 def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str, max_depth: int = 4) -> str:
     if error := _require(account_id, "account_id"):
         return _json({"success": False, "error": error})
@@ -468,8 +511,7 @@ def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str
         visited.add(folder_id)
         safe_folder = _seg(folder_id, "folder_id")
         path = f"/accounts/{safe_account}/folders/{safe_folder}/children"
-        children = _api_get(path)
-        for item in _iter_items(children):
+        for item in _iter_all_children(path):
             name = str(item.get("name") or item.get("display_name") or "")
             item_id = str(item.get("id") or item.get("folder_id") or "")
             item_type = str(item.get("type") or item.get("asset_type") or "").casefold()

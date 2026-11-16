@@ -515,9 +515,10 @@ def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str
             name = str(item.get("name") or item.get("display_name") or "")
             item_id = str(item.get("id") or item.get("folder_id") or "")
             item_type = str(item.get("type") or item.get("asset_type") or "").casefold()
-            if name.casefold() == target:
+            is_folder = "folder" in item_type
+            if is_folder and name.casefold() == target:
                 return item
-            if item_id and "folder" in item_type:
+            if item_id and is_folder:
                 found = search(item_id, depth + 1)
                 if found:
                     return found

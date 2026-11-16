@@ -485,6 +485,36 @@ def test_find_folder_fails_when_more_pages_cannot_be_followed(monkeypatch):
     assert "incomplete" in result["error"]
 
 
+def test_find_folder_ignores_a_file_with_the_requested_name(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        return {
+            "data": [
+                {"id": "file_1", "name": "Review", "type": "file"},
+                {"id": "folder_9", "name": "Review", "type": "folder"},
+            ]
+        }
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(frameio_tool.frameio_find_folder("acct_1", "Review", "root_1"))
+
+    assert result["found"] is True
+    assert result["folder"]["id"] == "folder_9"
+
+
+def test_frameio_credentials_are_in_the_env_var_catalog():
+    from hermes_cli.config import OPTIONAL_ENV_VARS
+
+    for name in ("FRAMEIO_CLIENT_ID", "FRAMEIO_CLIENT_SECRET", "FRAMEIO_LEGACY_TOKEN"):
+        assert OPTIONAL_ENV_VARS[name]["category"] == "tool"
+    assert OPTIONAL_ENV_VARS["FRAMEIO_CLIENT_SECRET"]["password"] is True
+    assert OPTIONAL_ENV_VARS["FRAMEIO_LEGACY_TOKEN"]["password"] is True
+
+
 def test_seg_encodes_everything_unsafe_in_one_segment():
     from tools import frameio_tool
 

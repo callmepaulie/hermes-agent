@@ -182,10 +182,10 @@ def test_projects_use_account_workspace_endpoint(monkeypatch):
 
     monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
 
-    result = json.loads(frameio_tool.frameio_list_projects("acct 1", "workspace 1"))
+    result = json.loads(frameio_tool.frameio_list_projects("acct_1", "workspace_1"))
 
     assert result["success"] is True
-    assert observed["url"] == "https://api.frame.io/v4/accounts/acct%201/workspaces/workspace%201/projects"
+    assert observed["url"] == "https://api.frame.io/v4/accounts/acct_1/workspaces/workspace_1/projects"
 
 
 def test_create_share_builds_expected_v4_payload(monkeypatch):
@@ -227,11 +227,11 @@ def test_create_share_builds_expected_v4_payload(monkeypatch):
     }
 
 
-def test_upload_file_creates_local_upload_and_puts_chunks(monkeypatch, tmp_path):
+def test_upload_file_creates_local_upload_and_puts_chunks(monkeypatch, tmp_path, tmp_path_factory):
     from tools import frameio_tool
 
     frameio_tool._auth_file().write_text(json.dumps({"access_token": "access-123"}), encoding="utf-8")
-    media = tmp_path / "clip.txt"
+    media = tmp_path_factory.mktemp("media") / "clip.txt"
     media.write_bytes(b"abcdef")
     api_calls = []
     put_calls = []
@@ -272,7 +272,7 @@ def test_upload_file_creates_local_upload_and_puts_chunks(monkeypatch, tmp_path)
     assert put_calls[1][2]["Content-Type"] == "text/plain"
 
 
-def test_upload_file_uses_destination_name_for_signed_content_type(monkeypatch, tmp_path):
+def test_upload_file_uses_destination_name_for_signed_content_type(monkeypatch, tmp_path, tmp_path_factory):
     """Regression for Frame.io/S3 SignatureDoesNotMatch on signed content-type.
 
     Live UAT showed Frame.io signs content-type in local-upload URLs. A local
@@ -283,7 +283,7 @@ def test_upload_file_uses_destination_name_for_signed_content_type(monkeypatch, 
     from tools import frameio_tool
 
     frameio_tool._auth_file().write_text(json.dumps({"access_token": "access-123"}), encoding="utf-8")
-    media = tmp_path / "payload"
+    media = tmp_path_factory.mktemp("media") / "payload"
     media.write_bytes(b"hello")
     put_calls = []
 
@@ -385,3 +385,229 @@ print(json.dumps({'names': names, 'defs': defs}))
     ]:
         assert expected in payload["names"]
         assert expected in payload["defs"]
+
+
+# ---------------------------------------------------------------------------
+# Hardening regressions
+# ---------------------------------------------------------------------------
+
+
+def _write_token(frameio_tool, **extra):
+    frameio_tool._auth_file().write_text(json.dumps({"access_token": "access-123", **extra}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("bad", ["a/b", "..", "a..b", "a\\b", "a?x=1", "a#f", "a b", "a\tb", "../x"])
+def test_ids_with_path_or_query_characters_are_rejected_before_any_request(monkeypatch, bad):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    calls = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda *a, **k: calls.append(a) or {})
+
+    results = [
+        frameio_tool.frameio_list_workspaces(bad),
+        frameio_tool.frameio_list_projects("acct_1", bad),
+        frameio_tool.frameio_list_folder_children("acct_1", bad),
+        frameio_tool.frameio_find_folder("acct_1", "x", bad),
+        frameio_tool.frameio_create_folder(bad, "folder_1", "n"),
+        frameio_tool.frameio_create_remote_upload("acct_1", bad, "n", "https://x.example/f"),
+        frameio_tool.frameio_upload_status("acct_1", bad),
+        frameio_tool.frameio_get_media_links("acct_1", bad),
+        frameio_tool.frameio_create_share("acct_1", bad, "n"),
+        frameio_tool.frameio_list_shares(bad, "project_1"),
+        frameio_tool.frameio_list_comments("acct_1", bad),
+        frameio_tool.frameio_create_comment("acct_1", bad, "hi"),
+    ]
+    for raw in results:
+        parsed = json.loads(raw)
+        assert parsed["success"] is False
+        assert "not allowed in an id" in parsed["error"]
+    assert calls == []
+
+
+def test_find_folder_rejects_unsafe_ids_returned_by_the_api(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    urls = []
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        urls.append(url)
+        return {"data": [{"id": "../../admin", "name": "sub", "type": "folder"}]}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    result = json.loads(frameio_tool.frameio_find_folder("acct_1", "missing", "root_1"))
+
+    assert result["success"] is False
+    assert len(urls) == 1
+
+
+def test_seg_encodes_everything_unsafe_in_one_segment():
+    from tools import frameio_tool
+
+    assert frameio_tool._seg("abc-123_X") == "abc-123_X"
+    assert frameio_tool._seg("a%b") == "a%25b"
+
+
+def test_create_share_defaults_to_secure_access(monkeypatch):
+    from tools import frameio_tool
+
+    _write_token(frameio_tool)
+    bodies = []
+
+    def fake_request(method, url, *, headers=None, data=None, json_body=None):
+        bodies.append(json_body)
+        return {"data": {}}
+
+    monkeypatch.setattr(frameio_tool, "_http_json", fake_request)
+
+    frameio_tool.frameio_create_share("acct_1", "project_1", "Review")
+    assert bodies[-1]["data"]["access"] == "secure"
+
+    from tools.registry import registry
+
+    registry.get_entry("frameio_create_share").handler({"account_id": "acct_1", "project_id": "project_1", "name": "n"})
+    assert bodies[-1]["data"]["access"] == "secure"
+    assert frameio_tool.FRAMEIO_CREATE_SHARE_SCHEMA["parameters"]["properties"]["access"]["default"] == "secure"
+
+    frameio_tool.frameio_create_share("acct_1", "project_1", "Review", access="public")
+    assert bodies[-1]["data"]["access"] == "public"
+
+
+def _upload_stubs(monkeypatch, frameio_tool, create_response):
+    _write_token(frameio_tool)
+    puts = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda *a, **k: create_response)
+    monkeypatch.setattr(frameio_tool, "_http_put_bytes", lambda url, payload, headers=None: puts.append(url))
+    return puts
+
+
+def test_upload_fails_when_create_response_has_no_upload_urls(monkeypatch, tmp_path_factory):
+    from tools import frameio_tool
+
+    media = tmp_path_factory.mktemp("media") / "clip.mp4"
+    media.write_bytes(b"abcdef")
+    _upload_stubs(monkeypatch, frameio_tool, {"data": {"id": "file_1"}})
+
+    result = json.loads(frameio_tool.frameio_upload_file("acct_1", "folder_1", str(media)))
+
+    assert result["success"] is False
+    assert "no upload URLs" in result["error"]
+
+
+def test_upload_fails_when_uploaded_bytes_differ_from_file_size(monkeypatch, tmp_path_factory):
+    from tools import frameio_tool
+
+    media = tmp_path_factory.mktemp("media") / "clip.mp4"
+    media.write_bytes(b"abcdef")
+    _upload_stubs(monkeypatch, frameio_tool, {"data": {"id": "f", "upload_urls": [{"size": 3, "url": "https://u.example/p1"}]}})
+
+    result = json.loads(frameio_tool.frameio_upload_file("acct_1", "folder_1", str(media)))
+
+    assert result["success"] is False
+    assert "incomplete" in result["error"]
+
+
+def test_upload_refuses_non_https_upload_urls_without_sending_bytes(monkeypatch, tmp_path_factory):
+    from tools import frameio_tool
+
+    media = tmp_path_factory.mktemp("media") / "clip.mp4"
+    media.write_bytes(b"abcdef")
+    puts = _upload_stubs(
+        monkeypatch,
+        frameio_tool,
+        {"data": {"id": "f", "upload_urls": [{"size": 3, "url": "https://u.example/p1"}, {"size": 3, "url": "http://evil.example/p2"}]}},
+    )
+
+    result = json.loads(frameio_tool.frameio_upload_file("acct_1", "folder_1", str(media)))
+
+    assert result["success"] is False
+    assert "https" in result["error"]
+    assert puts == []
+
+
+def test_upload_refuses_sensitive_paths(monkeypatch, tmp_path, tmp_path_factory):
+    from tools import frameio_tool
+
+    fake_home = tmp_path_factory.mktemp("userhome")
+    monkeypatch.setattr(frameio_tool.Path, "home", classmethod(lambda cls: fake_home))
+    puts = _upload_stubs(monkeypatch, frameio_tool, {"data": {"id": "f", "upload_urls": [{"size": 1, "url": "https://u.example/p"}]}})
+    media_dir = tmp_path_factory.mktemp("media")
+
+    blocked = []
+    (tmp_path / "frameio_auth.json").write_text("x")  # inside the Hermes home
+    blocked.append(tmp_path / "frameio_auth.json")
+    for d in (".ssh", ".aws", ".gnupg", ".config"):
+        (fake_home / d).mkdir()
+        (fake_home / d / "file.bin").write_text("x")
+        blocked.append(fake_home / d / "file.bin")
+    (media_dir / ".hidden").mkdir()
+    (media_dir / ".hidden" / "clip.mp4").write_text("x")
+    blocked.append(media_dir / ".hidden" / "clip.mp4")
+    for name in [".env", "server.pem", "tls.key", "id_rsa", "id_rsa.pub", "id_ed25519", "frameio_auth.json"]:
+        (media_dir / name).write_text("x")
+        blocked.append(media_dir / name)
+    (media_dir / "innocent.mp4").symlink_to(tmp_path / "frameio_auth.json")
+    blocked.append(media_dir / "innocent.mp4")
+
+    for path in blocked:
+        result = json.loads(frameio_tool.frameio_upload_file("acct_1", "folder_1", str(path)))
+        assert result["success"] is False, path
+        assert "refused" in result["error"], path
+    assert puts == []
+
+
+def test_upload_still_accepts_ordinary_media_paths(monkeypatch, tmp_path_factory):
+    from tools import frameio_tool
+
+    media = tmp_path_factory.mktemp("media") / "final-cut.mov"
+    media.write_bytes(b"abc")
+    _upload_stubs(monkeypatch, frameio_tool, {"data": {"id": "f", "upload_urls": [{"size": 3, "url": "https://u.example/p"}]}})
+
+    result = json.loads(frameio_tool.frameio_upload_file("acct_1", "folder_1", str(media)))
+
+    assert result["success"] is True
+
+
+def test_expired_oauth_token_is_not_sent_and_tells_user_to_log_in_again(monkeypatch):
+    import time
+
+    from tools import frameio_tool
+
+    _write_token(frameio_tool, expires_at=int(time.time()) - 10, refresh_token="r")
+    calls = []
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda *a, **k: calls.append(a) or {})
+
+    result = json.loads(frameio_tool.frameio_me())
+
+    assert result["success"] is False
+    assert result["auth_required"] is True
+    assert "frameio_login" in result["error"]
+    assert calls == []
+
+
+def test_unexpired_oauth_token_is_still_sent(monkeypatch):
+    import time
+
+    from tools import frameio_tool
+
+    _write_token(frameio_tool, expires_at=int(time.time()) + 3600)
+    monkeypatch.setattr(frameio_tool, "_http_json", lambda *a, **k: {"ok": True})
+
+    assert json.loads(frameio_tool.frameio_me())["success"] is True
+
+
+def test_registry_only_treats_underscore_register_helper_as_self_registration():
+    import ast
+
+    from tools.registry import _is_registry_register_call
+
+    def parse(src):
+        return ast.parse(src).body[0]
+
+    assert _is_registry_register_call(parse("registry.register(name='x')"))
+    assert _is_registry_register_call(parse("_register('x')"))
+    assert not _is_registry_register_call(parse("my_register('x')"))
+    assert not _is_registry_register_call(parse("deregister('x')"))
+    assert not _is_registry_register_call(parse("register('x')"))

@@ -40,8 +40,8 @@ def _is_registry_register_call(node: ast.AST) -> bool:
         return True
     # Some tool modules use a tiny local helper around registry.register to
     # avoid repeating common metadata for many tools. Treat top-level helper
-    # calls named like *_register as self-registration too.
-    return isinstance(func, ast.Name) and func.id.endswith("register")
+    # calls named ``_register`` as self-registration too.
+    return isinstance(func, ast.Name) and func.id == "_register"
 
 
 def _module_registers_tools(module_path: Path) -> bool:

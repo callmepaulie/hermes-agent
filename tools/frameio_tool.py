@@ -7,6 +7,7 @@ legacy developer-token path (`x-frameio-legacy-token-auth: true`).
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import mimetypes
 import os
@@ -160,6 +161,28 @@ def _require(value: str, name: str) -> str | None:
     return None
 
 
+_ID_FORBIDDEN = ("/", "\\", "..", "?", "#")
+
+
+def _seg(value: Any, name: str = "id") -> str:
+    """Validate and percent-encode a caller-supplied id for use as one URL path segment."""
+    text = str(value) if value is not None else ""
+    if not text:
+        raise ValueError(f"{name} is required")
+    if any(ch.isspace() for ch in text) or any(bad in text for bad in _ID_FORBIDDEN):
+        raise ValueError(f"{name} contains characters not allowed in an id (/, \\, .., ?, #, whitespace)")
+    return urllib.parse.quote(text, safe="")
+
+
+def _id_error(**ids: Any) -> str | None:
+    for name, value in ids.items():
+        try:
+            _seg(value, name)
+        except ValueError as exc:
+            return _json({"success": False, "error": str(exc)})
+    return None
+
+
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
@@ -225,6 +248,9 @@ def _auth_headers() -> dict[str, str]:
     access_token = state.get("access_token")
     if not access_token:
         raise PermissionError("not_authenticated")
+    expires_at = state.get("expires_at")
+    if expires_at and int(expires_at) <= int(time.time()):
+        raise PermissionError("Frame.io OAuth token has expired; run frameio_login again (tokens are not refreshed automatically).")
     return {"Authorization": f"Bearer {access_token}"}
 
 
@@ -271,8 +297,8 @@ def _exchange_code_for_token(code: str) -> dict[str, Any]:
 def _safe_api_call(fn: Any) -> dict[str, Any]:
     try:
         return {"success": True, "data": fn()}
-    except PermissionError:
-        return json.loads(_auth_required())
+    except PermissionError as exc:
+        return json.loads(_auth_required(str(exc) or "not_authenticated"))
     except Exception as exc:
         return {"success": False, "auth_required": False, "auth_mode": _auth_mode(), "error": str(exc)}
 
@@ -378,7 +404,9 @@ def frameio_list_accounts() -> str:
 def frameio_list_workspaces(account_id: str) -> str:
     if error := _require(account_id, "account_id"):
         return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
+    if error := _id_error(account_id=account_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/workspaces")))
 
 
@@ -387,8 +415,10 @@ def frameio_list_projects(account_id: str, workspace_id: str) -> str:
         return _json({"success": False, "error": error})
     if error := _require(workspace_id, "workspace_id"):
         return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_workspace = urllib.parse.quote(workspace_id)
+    if error := _id_error(account_id=account_id, workspace_id=workspace_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_workspace = _seg(workspace_id, "workspace_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/workspaces/{safe_workspace}/projects")))
 
 
@@ -397,8 +427,10 @@ def frameio_list_folder_children(account_id: str, folder_id: str, include: str =
         return _json({"success": False, "error": error})
     if error := _require(folder_id, "folder_id"):
         return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_folder = urllib.parse.quote(folder_id)
+    if error := _id_error(account_id=account_id, folder_id=folder_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_folder = _seg(folder_id, "folder_id")
     params = {"include": include} if include else None
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/folders/{safe_folder}/children", params=params)))
 
@@ -424,7 +456,9 @@ def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str
 
     target = folder_name.strip().casefold()
     visited: set[str] = set()
-    safe_account = urllib.parse.quote(account_id)
+    if error := _id_error(account_id=account_id, parent_folder_id=parent_folder_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
 
     def search(folder_id: str, depth: int) -> dict[str, Any] | None:
         if depth > max_depth:
@@ -432,7 +466,8 @@ def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str
         if folder_id in visited:
             return None
         visited.add(folder_id)
-        path = f"/accounts/{safe_account}/folders/{urllib.parse.quote(folder_id)}/children"
+        safe_folder = _seg(folder_id, "folder_id")
+        path = f"/accounts/{safe_account}/folders/{safe_folder}/children"
         children = _api_get(path)
         for item in _iter_items(children):
             name = str(item.get("name") or item.get("display_name") or "")
@@ -448,8 +483,8 @@ def frameio_find_folder(account_id: str, folder_name: str, parent_folder_id: str
 
     try:
         found = search(parent_folder_id, 0)
-    except PermissionError:
-        return _auth_required()
+    except PermissionError as exc:
+        return _auth_required(str(exc) or "not_authenticated")
     except Exception as exc:
         return _json({"success": False, "auth_required": False, "auth_mode": _auth_mode(), "error": str(exc)})
 
@@ -465,8 +500,10 @@ def frameio_create_folder(account_id: str, parent_folder_id: str, name: str) -> 
     for value, label in [(account_id, "account_id"), (parent_folder_id, "parent_folder_id"), (name, "name")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_folder = urllib.parse.quote(parent_folder_id)
+    if error := _id_error(account_id=account_id, parent_folder_id=parent_folder_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_folder = _seg(parent_folder_id, "parent_folder_id")
     body = {"data": {"name": name}}
     return _json(_safe_api_call(lambda: _api_post(f"/accounts/{safe_account}/folders/{safe_folder}/folders", body)))
 
@@ -475,8 +512,10 @@ def frameio_create_remote_upload(account_id: str, folder_id: str, name: str, sou
     for value, label in [(account_id, "account_id"), (folder_id, "folder_id"), (name, "name"), (source_url, "source_url")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_folder = urllib.parse.quote(folder_id)
+    if error := _id_error(account_id=account_id, folder_id=folder_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_folder = _seg(folder_id, "folder_id")
     body = {"data": {"name": name, "source_url": source_url}}
     return _json(_safe_api_call(lambda: _api_post(f"/accounts/{safe_account}/folders/{safe_folder}/files/remote_upload", body)))
 
@@ -496,18 +535,54 @@ def _file_id_from_response(response: Any) -> str:
     return str(data.get("id") or "") if isinstance(data, dict) else ""
 
 
+_BLOCKED_UPLOAD_DIRS = (".ssh", ".aws", ".gnupg", ".config")
+_BLOCKED_UPLOAD_NAMES = (".env", "*.pem", "*.key", "id_rsa*", "id_ed25519*", AUTH_FILENAME)
+
+
+def _upload_path_violation(path: Path) -> str | None:
+    """Return the rule a local upload path violates, or None if it may be uploaded."""
+    expanded = path.expanduser()
+    try:
+        resolved = expanded.resolve()
+        hermes_home = get_hermes_home().resolve()
+        user_home = Path.home().resolve()
+    except (OSError, RuntimeError) as exc:
+        return f"path could not be resolved ({exc})"
+
+    def _within(base: Path) -> bool:
+        return resolved == base or base in resolved.parents
+
+    if _within(hermes_home):
+        return "path is inside the Hermes home directory"
+    for dirname in _BLOCKED_UPLOAD_DIRS:
+        if _within(user_home / dirname):
+            return f"path is inside ~/{dirname}"
+    for candidate in (expanded, resolved):
+        if any(part.startswith(".") and part not in (".", "..") for part in candidate.parts):
+            return "path has a component starting with a dot (hidden file or directory)"
+    for candidate in (expanded, resolved):
+        lowered = candidate.name.casefold()
+        if any(fnmatch.fnmatch(lowered, pattern.casefold()) for pattern in _BLOCKED_UPLOAD_NAMES):
+            return "file name looks like a credential file (.env, *.pem, *.key, id_rsa*, id_ed25519*, frameio_auth.json)"
+    return None
+
+
 def frameio_upload_file(account_id: str, folder_id: str, file_path: str, name: str = "") -> str:
     for value, label in [(account_id, "account_id"), (folder_id, "folder_id"), (file_path, "file_path")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
     path = Path(file_path).expanduser()
+    if violation := _upload_path_violation(path):
+        return _json({"success": False, "error": f"file_path refused: {violation}"})
     if not path.exists() or not path.is_file():
         return _json({"success": False, "error": f"file_path does not exist or is not a file: {path}"})
     upload_name = name or path.name
     file_size = path.stat().st_size
     content_type = mimetypes.guess_type(upload_name)[0] or "application/octet-stream"
-    safe_account = urllib.parse.quote(account_id)
-    safe_folder = urllib.parse.quote(folder_id)
+    if error := _id_error(account_id=account_id, folder_id=folder_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_folder = _seg(folder_id, "folder_id")
 
     def do_upload() -> dict[str, Any]:
         create_response = _api_post(
@@ -515,6 +590,12 @@ def frameio_upload_file(account_id: str, folder_id: str, file_path: str, name: s
             {"data": {"name": upload_name, "file_size": file_size}},
         )
         upload_urls = _upload_urls_from_response(create_response)
+        if not upload_urls:
+            raise RuntimeError("Frame.io create response contained no upload URLs; nothing was uploaded")
+        for index, part in enumerate(upload_urls, start=1):
+            parsed = urllib.parse.urlparse(str(part.get("url") or ""))
+            if parsed.scheme != "https" or not parsed.netloc:
+                raise RuntimeError(f"Upload URL at index {index} is not an https URL; refusing to upload")
         bytes_uploaded = 0
         with path.open("rb") as handle:
             for index, part in enumerate(upload_urls, start=1):
@@ -527,6 +608,8 @@ def frameio_upload_file(account_id: str, folder_id: str, file_path: str, name: s
                     raise RuntimeError(f"Unexpected EOF while reading upload chunk {index}")
                 _http_put_bytes(upload_url, chunk, headers={"x-amz-acl": "private", "Content-Type": content_type})
                 bytes_uploaded += len(chunk)
+        if bytes_uploaded != file_size:
+            raise RuntimeError(f"Uploaded {bytes_uploaded} bytes but file size is {file_size}; upload is incomplete")
         return {
             "file": create_response,
             "file_id": _file_id_from_response(create_response),
@@ -542,8 +625,10 @@ def frameio_upload_status(account_id: str, file_id: str) -> str:
     for value, label in [(account_id, "account_id"), (file_id, "file_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_file = urllib.parse.quote(file_id)
+    if error := _id_error(account_id=account_id, file_id=file_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_file = _seg(file_id, "file_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/files/{safe_file}/status")))
 
 
@@ -551,8 +636,10 @@ def frameio_get_media_links(account_id: str, file_id: str, include: str = "media
     for value, label in [(account_id, "account_id"), (file_id, "file_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_file = urllib.parse.quote(file_id)
+    if error := _id_error(account_id=account_id, file_id=file_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_file = _seg(file_id, "file_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/files/{safe_file}", params={"include": include})))
 
 
@@ -561,7 +648,7 @@ def frameio_create_share(
     project_id: str,
     name: str,
     asset_ids: list[str] | None = None,
-    access: str = "public",
+    access: str = "secure",
     downloading_enabled: bool = True,
     description: str = "",
 ) -> str:
@@ -575,8 +662,10 @@ def frameio_create_share(
         data["asset_ids"] = asset_ids
     if description:
         data["description"] = description
-    safe_account = urllib.parse.quote(account_id)
-    safe_project = urllib.parse.quote(project_id)
+    if error := _id_error(account_id=account_id, project_id=project_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_project = _seg(project_id, "project_id")
     return _json(_safe_api_call(lambda: _api_post(f"/accounts/{safe_account}/projects/{safe_project}/shares", {"data": data})))
 
 
@@ -584,8 +673,10 @@ def frameio_list_shares(account_id: str, project_id: str) -> str:
     for value, label in [(account_id, "account_id"), (project_id, "project_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_project = urllib.parse.quote(project_id)
+    if error := _id_error(account_id=account_id, project_id=project_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_project = _seg(project_id, "project_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/projects/{safe_project}/shares")))
 
 
@@ -593,8 +684,10 @@ def frameio_list_comments(account_id: str, file_id: str) -> str:
     for value, label in [(account_id, "account_id"), (file_id, "file_id")]:
         if error := _require(value, label):
             return _json({"success": False, "error": error})
-    safe_account = urllib.parse.quote(account_id)
-    safe_file = urllib.parse.quote(file_id)
+    if error := _id_error(account_id=account_id, file_id=file_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_file = _seg(file_id, "file_id")
     return _json(_safe_api_call(lambda: _api_get(f"/accounts/{safe_account}/files/{safe_file}/comments")))
 
 
@@ -605,8 +698,10 @@ def frameio_create_comment(account_id: str, file_id: str, text: str, timestamp: 
     data: dict[str, Any] = {"text": text}
     if timestamp:
         data["timestamp"] = timestamp
-    safe_account = urllib.parse.quote(account_id)
-    safe_file = urllib.parse.quote(file_id)
+    if error := _id_error(account_id=account_id, file_id=file_id):
+        return error
+    safe_account = _seg(account_id, "account_id")
+    safe_file = _seg(file_id, "file_id")
     return _json(_safe_api_call(lambda: _api_post(f"/accounts/{safe_account}/files/{safe_file}/comments", {"data": data})))
 
 
@@ -712,7 +807,7 @@ FRAMEIO_CREATE_SHARE_SCHEMA = _schema(
         "project_id": UUID_PROP,
         "name": {"type": "string", "description": "Share name."},
         "asset_ids": {"type": "array", "items": {"type": "string"}, "description": "File/folder/version stack IDs to share."},
-        "access": {"type": "string", "enum": ["public", "secure"], "default": "public"},
+        "access": {"type": "string", "enum": ["public", "secure"], "default": "secure", "description": "Defaults to secure; use public only when explicitly requested."},
         "downloading_enabled": {"type": "boolean", "default": True},
         "description": {"type": "string", "description": "Optional share description."},
     },
@@ -787,7 +882,7 @@ _register(
         project_id=args.get("project_id", ""),
         name=args.get("name", ""),
         asset_ids=args.get("asset_ids") or [],
-        access=args.get("access", "public"),
+        access=args.get("access", "secure"),
         downloading_enabled=bool(args.get("downloading_enabled", True)),
         description=args.get("description", ""),
     ),

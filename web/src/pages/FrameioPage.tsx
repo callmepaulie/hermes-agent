@@ -27,7 +27,7 @@ const toolCards = [
   {
     icon: MonitorCheck,
     name: "frameio_status",
-    description: "Reports auth readiness, token presence, refresh state, and missing configuration without leaking secrets.",
+    description: "Reports auth readiness, token presence, expiry state, and missing configuration without leaking secrets.",
   },
   {
     icon: Network,

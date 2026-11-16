@@ -859,6 +859,16 @@ delegation:
 # honcho: {}
 
 # =============================================================================
+# Frame.io (optional toolset)
+# =============================================================================
+# Non-secret settings. FRAMEIO_CLIENT_ID / FRAMEIO_CLIENT_SECRET /
+# FRAMEIO_LEGACY_TOKEN go in ~/.hermes/.env. The FRAMEIO_REDIRECT_URI and
+# FRAMEIO_AUTH_MODE env vars, when set, take precedence over these values.
+# frameio:
+#   redirect_uri: "http://127.0.0.1:43828/frameio/callback"
+#   auth_mode: ""   # "legacy" | "oauth" | "s2s"; empty = legacy if FRAMEIO_LEGACY_TOKEN is set, else oauth
+
+# =============================================================================
 # Display
 # =============================================================================
 display:
